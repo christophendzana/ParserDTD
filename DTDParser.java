@@ -9,7 +9,9 @@ import java.util.Collection;
 import java.util.Vector;
 import javax.swing.text.html.parser.AttributeList;
 import javax.swing.text.html.parser.ContentModel;
+import javax.swing.text.html.parser.DTD;
 import javax.swing.text.html.parser.Element;
+import javax.swing.text.html.parser.Entity;
 
 /**
  *this class parse a DTD file and make DTD ready to validate XML file associated 
@@ -20,84 +22,139 @@ import javax.swing.text.html.parser.Element;
 public class DTDParser extends Parser{
     
     
-    public DTDParser(HDTD dtd) {
+    public DTDParser(DTD dtd) {
         super(dtd);
     }
     
     
-    public void parse(Reader in){
+    public synchronized void parse(Reader in){
         
         try {
             
-            
-        this.ch = in.read();
-        String name = null;
-        String attributeName = null;
-        Element element = null;
         int tag = 0;
-        
+        Entity entity = null;//if parameter entity englobe an attribut it should be store
             while(this.in.ready()){
+                ch = in.read();
                 switch(ch){
                     case '<':
-                        if(tag == '<')
-                            error("Syntax.Error", "Tag should be closed");
+                        if(tag != 0 || tag != '%')//tag == % if only if string <![%Entity; have been parsed successfully
+                            error("Syntax.Error", "Missplaced open tag character");
                         tag = ch;
-                        ch = in.read();
                         skipSpace();
                         break;
+//in this case we have three possibility which are 
+ //<!-- : Comment possibility here we should parse comment
+ //<!TYPE : TYPE should be egual to : ELEMENT, ATTRIBUTE, ENTITY or ANNOTATION
+ //<![%entity;[ : ATTRIBUTE exclusion or ignore possibility; Here if entity is parameter type it can take 
+      //two value which are INCLUDE or IGNORE if value is ignore value Attribute should be excluded from DTD 
+      // and if value's entity is INCLUDE attribute should be included from DTD
                     case '!':
                         if(tag != '<'){
-                            error("Syntax.Instruction", "< missed");
+                            error("Error.DTD", "! missed");
                         }
+                        tag = 0;
                         int spaceCount = skipSpace();
                         
                         if(spaceCount != 0)
-                            warning("extra space");
-                        // we can have <!-- characters which correspond to comment 
-                        char[] chs = new char[2];
-                        //we read next character to see if they maching with 
-                        //comment character
-                        int len = in.read(chs); 
+                            error("Error.DTD", "Extra space");
                         
-                        //we assume that if reader can't read two characters it means we 
-                        //reached end of file, so error should be thrown
-                        if(len == 2){
-                            name = new String(chs); 
-                        } else {
-                            error("End of File");
-                        } 
-                        //then verify if its correspond to comment caracters
-                        if(name.equals("--")){//pattern <!-- have been parsed
-                            parseComment();
-                            ch = in.read();
-                            break;
+                        switch(ch = in.read()){
+                            case '[' : //in this case we have this type of syntaxe <![
+                                skipSpace();
+                                if((ch = in.read()) == '%'){ //type of syntaxe <![%
+                                    for(;;){
+                                        ch = in.read();
+                                        if(ch == -1){
+                                            error("End Of FIle");
+                                            break;
+                                        } else if(ch == ';'){
+                                            entity = dtd.getEntity(getString(0));
+                                            if(entity == null){
+                                                error("Error.DTD", "Parameter entity "+getString(0)+" doesn't exist");
+                                            }
+                                            tag = '%';
+                                            break;
+                                        } else {
+                                            addString(ch);
+                                        }
+                                    
+                                    }
+                                    if(!entity.isParameter())
+                                        error("Error.DTD", "Entity : "+entity.getName()+" should be egual to INCLUDE or IGNORE");
+                                } else {
+                                    error("Error.DTD", "Misplaced character : "+(char)ch);
+                                }
+                                
+                                break;
+                            case '-' :
+                                ch = in.read();
+                                skipSpace();
+                                if(ch != '-')
+                                    error("Error.DTD", "Misplaced character");
+                                
+                                parseComment();
+                                break;
+                            default :
+                                addString(ch);
+                                break;
                         }
-                        //now let's determine what we are parsing for (ELEMENT, ATTRIBUTE or ENTITY)
-                        while((ch = in.read()) != ' '){
-                            if(name.length() > 10)
-                                /**name should contain ELEMENT, ATTRIBUTE or ENTITY which correspond 
-                                 * to 9 characters at the max so over this length we assume that it is
-                                 * an error for avoiding unnacessary loop
-                                 */ 
-                                 error("Syntax.Error", "inexpected loop");
-                            
-                                //occur when parser reach the last character of this file
-                            if(ch == -1){
-                                error("End Of File");
+                    case '[' ://this character is read if only Entity had been already verified
+                        if(tag != '%')
+                            error("Error.DTD", "Missplaced character [");
+                        tag = ch;
+                        skipSpace();
+                        resetBuffer();
+                        break;
+                    case ' ' :
+                        if(!getString(0).isEmpty())
+                            switch(getString(0).toLowerCase()){
+                                case "ELEMENT" :
+                                    if(entity != null)
+                                        error("Error.DTD", "Syntax error");
+                                    resetBuffer();
+                                    
+                                    parseElement();
+                                    break;
+                                case "ATTLIST" : 
+                                    resetBuffer();
+                                    boolean b = true;
+                                    String param = null;
+                                    if(entity != null){
+                                        param = new String(entity.data);
+                                        b = param.equalsIgnoreCase("INCLUDE");
+                                    }
+                                    parseAttributeList(b);
+                                    break;
+                                case "Entity" :
+                                    if(entity != null)
+                                        error("Error.DTD", "Syntax error");
+                                    resetBuffer();
+                                    parseEntity();
+                                    break;
+                                case "NOTATION" :
+                                    if(entity != null)
+                                        error("Error.DTD", "Syntax error");
+                                    parseNotation();
+                                    break;
+                                default :
+                                    error("Error.DTD", "");
                             }
-                            name = name.concat(""+(char)ch);
-                        }
+                        break;
+                    case ']' : 
+                        if(tag != '[' || tag != ']')
+                            error("Error.DTD", "missplaced character : "+(char)ch);
+                        skipSpace();
+                        if((ch = in.read()) != ']')
+                            error("Error.DTD", "Misplaced character : "+(char)ch);
+                        tag = ch;
+                        break;
+                    case '>' :
+                        if(tag != ']' || tag != '<')
+                            error("Error.DTD", "Misplaced character : "+(char)ch);
+                        break;
                         
-                       if(name.equals("ELEMENT")){
-                           parseElement();
-                       } else if(name.equals("ATTLIST")){
-                           parseAttributeList();
-                       } else if(name.equals("ENTITY")){
-                           parseEntity();
-                       } else {
-                           error("DTD parse Error");
-                       }
-                    default : ;     
+                    default : 
+                        addString(ch);     
                 }
             }
         } catch (Exception e) {
@@ -202,7 +259,6 @@ public class DTDParser extends Parser{
         ContentModel cm = null;
         ContentModel bufferContent = cm;
         Element rootElement = null;
-        StringBuffer elementName = new StringBuffer(30);
         int spacialChar = 0;
         int spaceCount;
         //Identifier can be one of that value (, (, < or >
@@ -213,169 +269,135 @@ public class DTDParser extends Parser{
             spaceCount = skipSpace();
             
             if(spaceCount != 0)
-                warning("extra Space");
+                error("extra Space");
             
             while((ch = in.read()) != -1){
                 
                 switch(ch){
-                    case '(':
+                    case '('://when parser reach this caracter two case are possible
                         
+                        
+                        //first case is: parser has already read those caracters '<!ELEMENT rootElement (' so string buffer 
+                        //has already accumuluted rootElement's name bufferContent is still null and identifier is still egual to 0
                         if(rootElement == null && identifier == 0 && bufferContent == null &&  
-                                elementName != null && !elementName.isEmpty()){
-                            dtd.addElement(elementName.toString());
-                            rootElement = dtd.getElement(elementName.toString());
+                                !getString(0).isEmpty()){
+                            rootElement = dtd.defineElement(getString(0), -1, false, false, null, null, null, null);
                             bufferContent = cm = new ContentModel(rootElement);
+                            rootElement.content = cm;
                             identifier = '(';
-                        } else if(rootElement != null && bufferContent == cm){
+                            
+                            //second case is: parser has already read those caracters '<!Element rootElement (content1 | (' so
+                            //rootElement has been already created and one or some content model have been already created too
+                        } else if(rootElement != null && bufferContent == cm && getString(0).isEmpty()){
                             for(bufferContent = cm; bufferContent == null; bufferContent = bufferContent.next);
                             bufferContent = new ContentModel();
                         }else{
                             error("Error.DTD", "( character is misplaced");
                         }
-                        elementName = null; identifier = '(';  
+                        resetBuffer(); identifier = '(';  
                         break;
                     case ')':
-                        if(bufferContent != cm && identifier == '(' && elementName != null && !elementName.isEmpty()){
+                        if(bufferContent != cm && identifier == '(' && !getString(0).isEmpty()){
                             bufferContent = cm;
-                        } else if(identifier == ')' && bufferContent == cm && elementName != null && !elementName.isEmpty()){
+                        } else if(identifier == ')' && bufferContent == cm && getString(0).isEmpty()){
                             bufferContent = null; 
                         } else {
                             error("Error.DTD", ") character is misplaced");
                         }
-                        elementName = null; identifier = ')';
+                        resetBuffer(); identifier = ')';
                         break;
                     case ' ':
                         
                         spaceCount = skipSpace(); 
                         if(spaceCount >= 2)
                             error("Error.DTD", "Extra space");
+                        spacialChar = ch;
                         break;
                     case '>':
-                        if(bufferContent == cm && identifier == ')' && elementName == null){
+                        if(rootElement != null && cm != null  && identifier == ')' && getString(0).isEmpty()){
                             bufferContent = null; 
-                        } else if(bufferContent == cm && identifier == 0 && 
-                                elementName != null && elementName.toString().equalsIgnoreCase("PCDATA")){
-                            elementName = null;
+                        } else if(rootElement != null && identifier == 0 && cm == null && 
+                                (getString(0).equalsIgnoreCase("PCDATA") || getString(0).equalsIgnoreCase("EMPTY"))){
+                            resetBuffer();
                         } else {
                             error("Error.DTD", "> character is misplaced");
                         }
                         bufferContent = null; identifier = '>';
                         return;
                     case '#' :
-                        if(identifier == 0 && (bufferContent = cm) == null && rootElement == null &&
-                                !elementName.toString().isEmpty()) {
-                            dtd.addElement(elementName.toString());
-                            rootElement = dtd.getElement(elementName.toString());
+                        if((identifier == 0 && (bufferContent = cm) == null && rootElement == null &&
+                                !getString(0).toString().isEmpty())) {
+                            rootElement = dtd.defineElement(getString(0), HDTDConstants.ANY, false, false, null, null, null, null);
                             
-                            bufferContent = cm = new ContentModel(rootElement);
-                            
-                        } else if(identifier == '(' && bufferContent != null){
-                            
+                        } else if(identifier == '(' && bufferContent != null && rootElement != null){
+                            rootElement.type = HDTDConstants.ANY;
                         }else {
                             error("Error.DTD", "# character misplaced");
                         }
-                        elementName = new StringBuffer();
+                        resetBuffer();
                         
                         for(int i = 0; i <7; i++){
-                                elementName = elementName.append((char)in.read());
+                                addString(ch = in.read());
                             }
-                        if(!elementName.toString().equalsIgnoreCase("PCDATA")){
+                        if(!getString(0).equalsIgnoreCase("PCDATA")){
                             error("Error.DTD", "character # should be followed by PCDATA");
                         }
-                        dtd.addElement(elementName.toString()); 
-                        
                         break;
+                        //cardinality caracter should be apply either to the text (rootElement and PCDATA except) or to content model
                     case '*' :
                     case '+' :
                     case '?' :
-                        if(identifier == '(' && elementName != null && 
-                                  !elementName.isEmpty() && !elementName.toString().equalsIgnoreCase("PCDATA")){
-                           dtd.addElement(elementName.toString());
-                           Element element = dtd.getElement(elementName.toString());
-                           element.type = ch; spacialChar = ch;
+                        //if cardinality is applied to text rootElement should not be null that means rootElement have been 
+                        //already read
+                        if(rootElement != null && identifier == '(' && !getString(0).isEmpty() && 
+                                !getString(0).toString().equalsIgnoreCase("PCDATA")){
+                           dtd.defineElement(getString(0), ch, false, false, bufferContent, null, null, null);
+                           spacialChar = ch;
                            break;
-                        } else if(identifier ==')' && elementName == null && bufferContent == cm){
+                           
+                           //if cardinality is apply to content model 
+                        } else if(identifier ==')' && getString(0).isEmpty() && 
+                                (bufferContent == cm || (bufferContent == null && cm != null))){
                             for(bufferContent = cm; bufferContent == null; bufferContent = bufferContent.next){
                                 if(bufferContent.next == null)
                                     break;
                             }
-                            
-                            
-                            if(bufferContent.type == '|'){
-                                switch(ch){
-                                    case '*':
-                                        bufferContent.type = HDTDConstants.PIPE_STAR_CARDINALITY;
-                                        break;
-                                    case '+': 
-                                        bufferContent.type = HDTDConstants.PIPE_PLUS_CARDINALITY;
-                                        break;
-                                    case '?': 
-                                        bufferContent.type = HDTDConstants.PIPE_ONCE_CARDINALITY;
-                                }
-                            } else if(bufferContent.type == ','){
-                                
-                                switch(ch){
-                                    case '*':
-                                        bufferContent.type = HDTDConstants.SEQ_STAR_CARDINALITY;
-                                        break;
-                                    case '+': 
-                                        bufferContent.type = HDTDConstants.SEQ_PLUS_CARDINALITY;
-                                        break;
-                                    case '?': 
-                                        bufferContent.type = HDTDConstants.SEQ_ONCE_CARDINALITY;
-                                }
-                            }
+                            bufferContent.type &= ch;
                             
                             bufferContent = cm;
                         } else {
                             error("Eroor.DTD", (char)ch+" character is misplaced");
                         }
-                        
+                        identifier = -1;
                         break;
-                    case '|' :
-                        if(elementName != null && !elementName.toString().isEmpty() && identifier == '(' 
-                                && bufferContent != null && bufferContent != cm){
-                            dtd.addElement(elementName.toString());
-                        } else{
-                            error("Error.DTD", "| character is misplaced");
-                        }
-                        bufferContent.type  = '|';
-                        elementName = new StringBuffer();
-                        break;
-                        
+                    case '|' :   
                     case ',' :
-                        if(elementName != null && !elementName.toString().isEmpty() && identifier == '(' 
-                                && bufferContent != null && bufferContent != cm){
-                            dtd.addElement(elementName.toString());
+                        if(!getString(0).isEmpty() && identifier == '(' 
+                                && bufferContent != null && (bufferContent.type == ch || bufferContent.type == 0)){
+                            dtd.defineElement(getString(0), 0, false, false, null, null, null, null);
                         } else{
-                            error("Error.DTD", "| character is misplaced");
+                            error("Error.DTD", Character.toString(ch)+"character is misplaced");
                         }
-                        bufferContent.type  = ',';
-                        elementName = new StringBuffer();
+                        bufferContent.type  = ch;
+                        resetBuffer();
+                        identifier = -1;
                         break;
                         
                     case -1 : 
                         if(identifier != '>')
                             
                             error("Error.DTD", "End of file");
+                        identifier = -1;
                         break;
                     default :
-                        if(identifier == ')' && elementName == null){
-                            error("Error.DTD", "misplaced element");
-                        } else 
-                        if(spacialChar != 0 && elementName.length() != 0)
-                            error("Error.DTD", "Misplaced element", 
-                                          "Element must not directly follow "+(char)spacialChar);
-                        else if (elementName == null){
-                            elementName = new StringBuffer();
+                        if(spacialChar == ' '){
+                            if(rootElement == null && !getString(0).isEmpty()){
+                                dtd.defineElement(getString(0), HDTDConstants.EMPTY, false, true, null, null, null, null);
+                                spacialChar = -1; resetBuffer();
+                            }
                         }
-                        
-                        if(isAvalidElementNameChar((char)ch, elementName.length())){
-                            elementName.append((char)ch);
-                        } else {
-                            warning("Invalid element Name");
-                            elementName.append((char)ch);
-                        }
+                        addString(ch);
+                        identifier = -1;
                         break;
                 }
             } 
@@ -393,7 +415,7 @@ public class DTDParser extends Parser{
     }
     
     
-    private void parseAttributeList(){
+    private void parseAttributeList(boolean include){
         //buffer which will store non specific String like #, ), ( and so else
         StringBuffer attElement = new StringBuffer();
         //element on witch attribute belong
@@ -406,16 +428,30 @@ public class DTDParser extends Parser{
             switch(ch){
                 
                 case '#' :
+                    if(attList == null){
+                        error("Error.DTD", "bad declaration attribute");
+                    }
+                    resetBuffer();
+                    break;
+                    
+                case '"' :
+                    if(element != null && attList != null && attList.values != null 
+                            && !attList.values.isEmpty() && !getString(0).isEmpty()){
+                        attList.value = getString(0);
+                    } else {
+                        error("Error.DTD", "Default value is misplaced");
+                    }
+                    resetBuffer();
                     break;
                 case ' ' :
-                    if(element == null && !attElement.isEmpty()){
-                         element = dtd.getElement(attElement.toString());
+                    if(element == null && !getString(0).isEmpty()){
+                         element = dtd.getElement(getString(0).toString());
                          
                          if(element == null)
                              error("Error.DTD", "Element "+attElement+" does not exist");
                          attList = element.atts;
-                         attElement = new StringBuffer();
-                    } else if(element != null && attList == null && !attElement.isEmpty()){
+                         resetBuffer();
+                    } else if(element != null && attList == null && !getString(0).isEmpty()){
                         attList = element.atts;
                         for(;;){
                             if(attList != null)
@@ -424,12 +460,13 @@ public class DTDParser extends Parser{
                                 break;
                             
                         }
-                        attList = new AttributeList(attElement.toString());
-                        attElement = new StringBuffer();
-                    } else if(element != null && attList != null && !attElement.isEmpty()){
+                        attList = new AttributeList(getString(0).toString());
+                        attList.modifier = HDTDConstants.IMPLIED;
+                        resetBuffer();
+                    } else if(element != null && attList != null && !getString(0).isEmpty()){
                         
                                 
-                        switch(attElement.toString().toLowerCase()){
+                        switch(getString(0).toUpperCase()){
                             case "CDATA":
                                 attList.type = HDTDConstants.CDATA;
                                 break;
@@ -448,16 +485,22 @@ public class DTDParser extends Parser{
                             case "NMTOKENS" :
                                 attList.type = HDTDConstants.NMTOKENS;
                                 break;
+                            case "REQUIRED" :
+                                attList.modifier = HDTDConstants.REQUIRED;
+                                break;
+                            case "FIXED" :
+                                attList.modifier = HDTDConstants.FIXED;
+                                break;
                             default :
                                 error("Error.DTD", "( character is missed");
                                 Vector values = new Vector();
-                                values.add(attElement);
                                 fillAttributeValue(values);
                                 if(!values.isEmpty())
                                     attList.values = values;
                                 attList = null;
                         }
                     }
+                    resetBuffer();
                     break;
                 case '(' :
                     Vector values = new Vector();
@@ -466,8 +509,34 @@ public class DTDParser extends Parser{
                         attList.values = values;
                     attList = null;
                     break;
+                case '>' :
+                    
+                    if(element == null || attList == null)
+                        error("Error.DTD", "inexpoitable attribute");
+                    //this character can be read without read space character like this IMPLIED> so in this case first thing 
+                    //to do is to verify if string buffer is not empty in this case try to determine modifier
+                    if(!getString(0).isEmpty()){
+                        switch(getString(0).toUpperCase()){
+                            case "REQUIRED" :
+                                attList.modifier = HDTDConstants.REQUIRED;
+                                break;
+                            case "FIXED" :
+                                attList.modifier = HDTDConstants.FIXED;
+                            case "IMPLIED" : 
+                                attList.modifier = HDTDConstants.IMPLIED;
+                                break;
+                            default :
+                                error("Error.DTD", "Unexpected modifier");
+                        }
+                    }
+                    
+                    if(attList.modifier == HDTDConstants.FIXED && attList.value == null){
+                        error("Error.DTD", "FIXED attribut should have default attribute");
+                    }
+                    if(!include) attList = null;//if include is false, this attribute must not be addeed into element
+                    break;
                 default :
-                    attElement.append((char)ch);
+                    addString((char)ch);
             }
             }
         } catch (Exception e) {
@@ -476,42 +545,52 @@ public class DTDParser extends Parser{
     }
     
     private void fillAttributeValue(Collection values){
-        StringBuffer attValue = new StringBuffer();
         int specialChar = 0;
         try {
             while((ch = in.read()) != -1){
                 switch(ch){
                     case '|' :
-                        if(!values.isEmpty() && !attValue.isEmpty()){
-                            values.add(attValue);
-                            attValue.delete(0, attValue.length());
+                        String buf = getString(0);
+                        if(!buf.isEmpty()){
+                            values.add(buf);
+                            resetBuffer();
                         }else {
                             error("Error.DTD", "Values should be specified after | character");
                         }
+                        specialChar = -1;
                         break;
                     case ' ' : 
                         specialChar = ' ';
                         error("Error.DTD", "Extra space");
                         break;
                     case ')' : 
-                        attValue = null;
+                        if(!getString(0).isEmpty()){
+                            values.add(getString(0));
+                        }
+                        resetBuffer();
+                        specialChar = -1;
                         return;
                     case '>' : 
-                        if(!attValue.isEmpty()){
+                        String buff = getString(0);
+                        if(!buff.isEmpty()){
                             error("Error.DTD", "Default attribut value is missed");
                             
                         } else {
                             error("Error.DTD", "value must follow | character");
                         }
-                        values.add(attValue);
+                        values.add(buff);
+                        specialChar = -1;
                         return;
                     case '"' : 
-                        attValue = null;
+                        resetBuffer();
+                        specialChar = -1;
                         return;
                     default :
-                        if(specialChar == ' ' && !attValue.isEmpty())
+                        //here we test case user write something like this ( value1 value2| that means nothing
+                        //because two value must be separated by pipe character
+                        if(specialChar == ' ' && !getString(0).isEmpty())
                             error("Error.DTD", "Bad attibute character");
-                        attValue.append((char)ch);
+                        addString((char)ch);
                 }
             }
         } catch (Exception e) {
@@ -519,6 +598,70 @@ public class DTDParser extends Parser{
     }
     
     private void parseEntity(){
+        
+        try {
+            Entity entity = null;
+            int paramEntity = -1;
+            while((ch = in.read()) != -1){
+            switch(ch){
+                case ' ':
+                    if(entity == null && !getString(0).isEmpty()){
+                        entity = dtd.defEntity(getString(0), paramEntity, -1);
+                    } else if(entity != null && entity.type == - 1  && !getString(0).isEmpty()){
+                        
+                        switch(getString(0).toUpperCase()){
+                            case "SYSTEM" : 
+                                entity.type = HDTDConstants.SYSTEM;
+                                break;
+                            case "PUBLIC" : 
+                                entity.type = HDTDConstants.PUBLIC;
+                                break;
+                            default : 
+                                error("Error.DTD", "Entity type not recognized");
+                        }
+                    }
+                    resetBuffer();
+                    break;
+                case '%' : 
+                    paramEntity = HDTDConstants.PARAMETER;
+                    break;
+                case '"' :
+                    if(entity != null && entity.type != -1 && !getString(0).isEmpty()){
+                        entity.data = getString(0).toCharArray();
+                        
+                    } 
+                    resetBuffer();
+                    break;
+                case '\'' :
+                    if(entity != null && entity.type == HDTDConstants.PARAMETER && getString(0).isEmpty()){
+                        switch(getString(0).toUpperCase()){
+                            case "INCLUDE" :
+                            case "IGNORE" :
+                                entity.data = getString(0).toCharArray();
+                                resetBuffer();
+                                break;
+                            default : 
+                                error("Error.DTD", "Type parameter entity must be INCLUDE or IGNORE");
+                        }
+                    }
+                default :
+                    addString((char)ch);
+            }
+            }
+        } catch (Exception e) {
+        }
+        
+    }
+    
+    private void parseNotation(){
+        
+        try {
+            while((ch = in.read()) != -1){
+                
+            
+            }
+        } catch (Exception e) {
+        }
         
     }
     
