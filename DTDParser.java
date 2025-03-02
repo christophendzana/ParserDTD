@@ -23,7 +23,6 @@ public class DTDParser extends Parser{
     
     
     public DTDParser(DTD dtd) {
-        super(dtd);
     }
     
     
@@ -33,14 +32,21 @@ public class DTDParser extends Parser{
             
         int tag = 0;
         Entity entity = null;//if parameter entity englobe an attribut it should be store
-            while(this.in.ready()){
-                ch = in.read();
+        this.in = in;
+        StringBuffer buffer = new StringBuffer();
+            while((ch = readCh()) != -1){
                 switch(ch){
                     case '<':
+                        ch = readCh();
+                        //skipSpace(); we have to rewrite this one
+                        
+                        if(ch != '!')
+                            error("Error.DTD", "Expected: ! read: "+(char)ch);
+                        /**
                         if(tag != 0 || tag != '%')//tag == % if only if string <![%Entity; have been parsed successfully
                             error("Syntax.Error", "Missplaced open tag character");
                         tag = ch;
-                        skipSpace();
+                        //skipSpace();**/
                         break;
 //in this case we have three possibility which are 
  //<!-- : Comment possibility here we should parse comment
@@ -48,17 +54,17 @@ public class DTDParser extends Parser{
  //<![%entity;[ : ATTRIBUTE exclusion or ignore possibility; Here if entity is parameter type it can take 
       //two value which are INCLUDE or IGNORE if value is ignore value Attribute should be excluded from DTD 
       // and if value's entity is INCLUDE attribute should be included from DTD
-                    case '!':
+                    /**case '!':
                         if(tag != '<'){
                             error("Error.DTD", "! missed");
                         }
                         tag = 0;
-                        int spaceCount = skipSpace();
+                        int spaceCount = 0;//skipSpace();
                         
                         if(spaceCount != 0)
                             error("Error.DTD", "Extra space");
                         
-                        switch(ch = in.read()){
+                        switch(ch = readCh()){
                             case '[' : //in this case we have this type of syntaxe <![
                                 skipSpace();
                                 if((ch = in.read()) == '%'){ //type of syntaxe <![%
@@ -95,9 +101,9 @@ public class DTDParser extends Parser{
                                 parseComment();
                                 break;
                             default :
-                                addString(ch);
+                                buffer.append((char)ch);
                                 break;
-                        }
+                        }**/
                     case '[' ://this character is read if only Entity had been already verified
                         if(tag != '%')
                             error("Error.DTD", "Missplaced character [");
@@ -106,13 +112,10 @@ public class DTDParser extends Parser{
                         resetBuffer();
                         break;
                     case ' ' :
-                        if(!getString(0).isEmpty())
-                            switch(getString(0).toLowerCase()){
+                        if(!buffer.isEmpty())
+                            switch(buffer.toString().toUpperCase()){
                                 case "ELEMENT" :
-                                    if(entity != null)
-                                        error("Error.DTD", "Syntax error");
-                                    resetBuffer();
-                                    
+                                    buffer.delete(0, buffer.length());
                                     parseElement();
                                     break;
                                 case "ATTLIST" : 
@@ -154,8 +157,9 @@ public class DTDParser extends Parser{
                         break;
                         
                     default : 
-                        addString(ch);     
+                        buffer.append((char)ch);
                 }
+                
             }
         } catch (Exception e) {
             error("file is reading");
@@ -263,15 +267,15 @@ public class DTDParser extends Parser{
         int spaceCount;
         //Identifier can be one of that value (, (, < or >
         int identifier = 0;
-        
+        StringBuffer buffer = new StringBuffer();
         try {
             
-            spaceCount = skipSpace();
+            spaceCount = 0;//skipSpace();
             
-            if(spaceCount != 0)
-                error("extra Space");
+            //if(spaceCount != 0)
+               // error("extra Space");
             
-            while((ch = in.read()) != -1){
+            while((ch = readCh()) != -1){
                 
                 switch(ch){
                     case '('://when parser reach this caracter two case are possible
@@ -279,10 +283,9 @@ public class DTDParser extends Parser{
                         
                         //first case is: parser has already read those caracters '<!ELEMENT rootElement (' so string buffer 
                         //has already accumuluted rootElement's name bufferContent is still null and identifier is still egual to 0
-                        if(rootElement == null && identifier == 0 && bufferContent == null &&  
-                                !getString(0).isEmpty()){
-                            rootElement = dtd.defineElement(getString(0), -1, false, false, null, null, null, null);
-                            bufferContent = cm = new ContentModel(rootElement);
+                        if(rootElement == null && !buffer.isEmpty()){
+                            rootElement = dtd.defineElement(buffer.toString(), -1, false, false, null, null, null, null);
+                            bufferContent = cm = new ContentModel(-1, new HContentModel(rootElement), null);
                             rootElement.content = cm;
                             identifier = '(';
                             
@@ -307,11 +310,13 @@ public class DTDParser extends Parser{
                         resetBuffer(); identifier = ')';
                         break;
                     case ' ':
-                        
-                        spaceCount = skipSpace(); 
-                        if(spaceCount >= 2)
-                            error("Error.DTD", "Extra space");
-                        spacialChar = ch;
+                        if(!buffer.isEmpty() && rootElement == null){
+                            rootElement = dtd.defineElement(getString(0), -1, false, false, null, null, null, null);
+                        }
+                        spaceCount = 0;//skipSpace(); 
+                        //if(spaceCount >= 2)
+                            //error("Error.DTD", "Extra space");
+                        //spacialChar = ch;
                         break;
                     case '>':
                         if(rootElement != null && cm != null  && identifier == ')' && getString(0).isEmpty()){
@@ -390,13 +395,13 @@ public class DTDParser extends Parser{
                         identifier = -1;
                         break;
                     default :
-                        if(spacialChar == ' '){
+                        /**if(spacialChar == ' '){
                             if(rootElement == null && !getString(0).isEmpty()){
                                 dtd.defineElement(getString(0), HDTDConstants.EMPTY, false, true, null, null, null, null);
                                 spacialChar = -1; resetBuffer();
                             }
-                        }
-                        addString(ch);
+                        }**/
+                        buffer.append((char)ch);
                         identifier = -1;
                         break;
                 }
